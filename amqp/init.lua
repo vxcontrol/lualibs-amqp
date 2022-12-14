@@ -26,10 +26,7 @@ local amqp = {}
 
 -- let ngx.socket take precedence to lua socket
 
-if _G.ngx and _G.ngx.socket then
-  socket = _G.ngx.socket
-  tcp = socket.tcp
-elseif use_cqueues == true then
+if use_cqueues == true then
   socket = require('cqueues.socket')
   tcp = socket
 else
@@ -151,15 +148,7 @@ local function sslhandshake(ctx)
   local err
   local errno
 
-  if _G.ngx then
-    session, err = sock:sslhandshake()
-    if not session then
-      logger.error("[amqp:sslhandshake] SSL handshake failed: ", err)
-    end
-
-    return session, err -- return
-
-  elseif use_cqueues == true then
+  if use_cqueues == true then
     if ssl_ctx then
       session, err, errno = sock:starttls(ssl_ctx)
     else
@@ -570,10 +559,6 @@ function amqp:timedout(timeouts)
   return timedout(self, timeouts)
 end
 
-local function exiting()
-  return _G.ngx and _G.ngx.worker and _G.ngx.worker.exiting()
-end
-
 --
 -- consumer
 --
@@ -609,10 +594,6 @@ function amqp:consume_loop(callback)
     --
     f, err0 = frame.consume_frame(self)
     if not f then -- if start
-      if exiting() then
-        err = "exiting"
-        break
-      end
       -- in order to send the heartbeat,
       -- the very read op need be awaken up periodically, so the timeout is expected.
       if err0 ~= "timeout" then
@@ -715,7 +696,6 @@ function amqp:consume_loop(callback)
   end
 
   self:teardown()
-  -- return not err or err ~= "exiting", err
   return nil, err or err0
 end
 

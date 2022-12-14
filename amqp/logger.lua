@@ -9,24 +9,12 @@ local logger = {}
 
 
 -- logging scaffold
-local log
-if _G.ngx and _G.ngx.log then
-  log = _G.ngx.log
-else
-  log = print
-end
+local log = print
 
 -- logging level for print
 local ERR   = 4
 local INFO  = 7
 local DEBUG = 8
-
--- ngx.log requires a number to indicate the logging level
-if _G.ngx then
-  ERR   = _G.ngx.ERR
-  INFO  = _G.ngx.INFO
-  DEBUG = _G.ngx.DEBUG
-end
 
 local level_ = INFO
 
