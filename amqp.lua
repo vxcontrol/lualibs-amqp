@@ -20,11 +20,9 @@ local min = math.min
 local socket
 local tcp
 
-local use_cqueues = true
+local use_cqueues = false
 
 local amqp = {}
-
--- let ngx.socket take precedence to lua socket
 
 if use_cqueues == true then
   socket = require('cqueues.socket')
@@ -70,9 +68,10 @@ if use_cqueues == true then
   end
 else
   function amqp:send(str) return self.sock:send(str) end
-  function amqp:receive(int) return self.sock:receive(int) end
+  function amqp:receive(int) return self.sock:receive(int,nil,true) end
 end
 
+--
 -- getopt(key, table, table, ..., value)
 -- return the key's value from the first table that has it, or VALUE if none do
 local  function _getopt(k,t,...)
@@ -85,7 +84,9 @@ local  function _getopt(k,t,...)
   end
 end
 
+--
 -- to check whether we have valid parameters to setup
+--
 local function mandatory_options(opts)
   if not opts then
     error("no opts provided")
@@ -99,7 +100,6 @@ local function mandatory_options(opts)
     error("as a consumer, queue is required")
   end
 end
-
 
 --
 -- initialize the context
@@ -123,6 +123,7 @@ function amqp:new(opts)
   local ctx = {
     sock = sock,
     ssl_ctx = opts.ssl_ctx or nil,
+    ssl_cfg = opts.ssl_cfg or nil,
     opts = opts,
     connection_state = c.state.CLOSED,
     channel_state = c.state.CLOSED,
@@ -131,7 +132,8 @@ function amqp:new(opts)
     revision = c.PROTOCOL_VERSION_REVISION,
     frame_max = c.DEFAULT_FRAME_SIZE,
     channel_max = c.DEFAULT_MAX_CHANNELS,
-    mechanism = c.MECHANISM_PLAIN
+    mechanism = opts.ssl_cfg and c.MECHANISM_EXTERNAL or c.MECHANISM_PLAIN,
+    locale = opts.locale or c.LOCALE,
   }
 
   setmetatable(ctx,mt)
@@ -155,7 +157,7 @@ local function sslhandshake(ctx)
       session, err, errno = sock:starttls()
     end
     if not session then
-      logger.error("[amqp:sslhandshake] SSL handshake failed: ", err)
+      logger.error("[amqp:sslhandshake] SSL handshake failed: ", err, errno)
     end
 
     return session, err -- return
@@ -167,10 +169,16 @@ local function sslhandshake(ctx)
 
   local params = {
     mode = "client",
-    protocol = "sslv23",
+    protocol = "tlsv1_2",
     verify = "none",
-    options = {"all", "no_sslv2","no_sslv3"}
+    options  = "all",
   }
+
+  if type(ctx.ssl_cfg) == "table" then
+    for k, v in pairs(ctx.ssl_cfg) do
+      params[k] = v
+    end
+  end
 
   ctx.sock = ssl.wrap(sock, params)
 
@@ -187,10 +195,9 @@ local function sslhandshake(ctx)
 end
 
 
-
+--
 -- connect to the AMQP server (broker)
 --
-
 function amqp:connect(...)
   local sock = self.sock
   if not sock then
@@ -224,6 +231,7 @@ function amqp:connect(...)
 end
 
 
+--
 -- to close the socket
 --
 function amqp:close()
@@ -244,15 +252,16 @@ local function platform()
 end
 
 
+--
 -- connection and channel
 --
-
 function amqp:connection_start_ok()
   local user = self.opts.user or "guest"
   local password = self.opts.password or "guest"
+  local response = self.mechanism == c.MECHANISM_PLAIN and
+    format("\0%s\0%s", user, password) or "\0"
   local f = frame.new_method_frame(c.DEFAULT_CHANNEL,
-  c.class.CONNECTION,
-  c.method.connection.START_OK)
+    c.class.CONNECTION, c.method.connection.START_OK)
   f.method = {
     properties = {
       product = c.PRODUCT,
@@ -264,8 +273,8 @@ function amqp:connection_start_ok()
       }
     },
     mechanism = self.mechanism,
-    response = format("\0%s\0%s", user, password),
-    locale = c.LOCALE
+    response = response,
+    locale = self.locale,
   }
 
   return frame.wire_method_frame(self, f)
@@ -273,8 +282,7 @@ end
 
 function amqp:connection_tune_ok()
   local f = frame.new_method_frame(c.DEFAULT_CHANNEL,
-    c.class.CONNECTION,
-    c.method.connection.TUNE_OK)
+    c.class.CONNECTION, c.method.connection.TUNE_OK)
   f.method = {
     no_wait = true,
     channel_max = self.channel_max or c.DEFAULT_MAX_CHANNELS,
@@ -286,8 +294,7 @@ end
 
 function amqp:connection_open()
   local f = frame.new_method_frame(c.DEFAULT_CHANNEL,
-  c.class.CONNECTION,
-  c.method.connection.OPEN)
+    c.class.CONNECTION, c.method.connection.OPEN)
   f.method = {
     virtual_host = self.opts.virtual_host or "/"
   }
@@ -308,8 +315,7 @@ end
 
 function amqp:connection_close(reason)
   local f = frame.new_method_frame(c.DEFAULT_CHANNEL,
-    c.class.CONNECTION,
-    c.method.connection.CLOSE)
+    c.class.CONNECTION, c.method.connection.CLOSE)
   f.method = sanitize_close_reason(self, reason)
   return frame.wire_method_frame(self,f)
 end
@@ -317,8 +323,7 @@ end
 
 function amqp:connection_close_ok()
   local f = frame.new_method_frame(self.channel or 1,
-    c.class.CONNECTION,
-    c.method.connection.CLOSE_OK)
+    c.class.CONNECTION, c.method.connection.CLOSE_OK)
   return frame.wire_method_frame(self,f)
 end
 
@@ -328,8 +333,7 @@ end
 
 function amqp:channel_open()
   local f = frame.new_method_frame(self.opts.channel or 1,
-  c.class.CHANNEL,
-  c.method.channel.OPEN)
+    c.class.CHANNEL, c.method.channel.OPEN)
   f.method = { no_wait = false }
   logger.dbg("[channel_open] wired a frame", "[class_id]: ", f.class_id, "[method_id]: ", f.method_id)
   local res, err = frame.wire_method_frame(self,f)
@@ -341,13 +345,15 @@ function amqp:channel_open()
 end
 
 function amqp:channel_close(reason)
-  local f = frame.new_method_frame(self.channel or c.DEFAULT_CHANNEL, c.class.CHANNEL, c.method.channel.CLOSE)
+  local f = frame.new_method_frame(self.channel or c.DEFAULT_CHANNEL,
+    c.class.CHANNEL, c.method.channel.CLOSE)
   f.method = sanitize_close_reason(self, reason)
   return frame.wire_method_frame(self,f)
 end
 
 function amqp:channel_close_ok()
-  local f = frame.new_method_frame(self.channel or 1, c.class.CHANNEL, c.method.channel.CLOSE_OK)
+  local f = frame.new_method_frame(self.channel or 1, c.class.CHANNEL,
+    c.method.channel.CLOSE_OK)
   return frame.wire_method_frame(self,f)
 end
 
@@ -542,7 +548,6 @@ end
 -- conclude a heartbeat timeout
 -- if and only if we see ctx.threshold or more failure heartbeats in the recent heartbeats ctx.window
 --
-
 local function timedout(ctx, timeouts)
   local window = ctx.window or 5
   local threshold = ctx.threshold or 4
@@ -562,7 +567,6 @@ end
 --
 -- consumer
 --
-
 function amqp:basic_ack(ok, delivery_tag)
   local f = frame.new_method_frame(self.channel or 1,
   c.class.BASIC,
@@ -765,9 +769,7 @@ end
 --
 -- publisher
 --
-
 function amqp:publish(payload,opts,properties)
-
   local ok
   local err
   local size = #payload
@@ -797,7 +799,6 @@ end
 -- queue
 --
 function amqp:queue_declare(opts)
-
   opts = opts or {}
 
   if not opts.queue and not self.opts.queue then
@@ -884,7 +885,6 @@ end
 --
 -- exchange
 --
-
 function amqp:exchange_declare(opts)
   opts = opts or {}
   local f = frame.new_method_frame(self.channel or 1,
@@ -968,9 +968,15 @@ function amqp:exchange_delete(opts)
 end
 
 --
+-- Set logger level
+--
+function amqp.set_log_level(level)
+  logger.set_level(level)
+end
+
+--
 -- basic
 --
-
 function amqp:basic_consume(opts)
   opts = opts or {}
   if not opts.queue and not self.opts.queue then

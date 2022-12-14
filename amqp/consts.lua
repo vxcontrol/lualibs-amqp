@@ -167,7 +167,8 @@ local amqp = {
   VERSION  = "1.0.2",
   COPYRIGHT = "Copyright (c) 2016,2017,2018 Meng Zhang @Yottaa,Inc , 4mig4",
   LOCALE = "en_US",
-  MECHANISM_PLAIN = "PLAIN"
+  MECHANISM_PLAIN = "PLAIN",
+  MECHANISM_EXTERNAL = "EXTERNAL"
 }
 
 return amqp
