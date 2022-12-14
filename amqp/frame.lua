@@ -1484,7 +1484,7 @@ end
 function amqp_frame.wire_protocol_header(ctx)
   local bytes, err = ctx:send("AMQP\0\0\9\1")
   if not bytes then
-    return nil, err
+    return nil, err or "empty error"
   end
   return amqp_frame.consume_frame(ctx)
 end
@@ -1494,7 +1494,7 @@ function amqp_frame.wire_heartbeat(ctx)
   local msg = frame:encode()
   local bytes, err = ctx:send(msg)
   if not bytes then
-    return nil,"[heartbeat]" .. err
+    return nil,"[heartbeat]" .. tostring(err or " empty error")
   end
 
   return bytes
@@ -1509,7 +1509,7 @@ function amqp_frame.wire_header_frame(ctx,body_size,properties)
   local msg = frame:encode()
   local bytes, err = ctx:send(msg)
   if not bytes then
-    return nil,"[wire_header_frame]" .. err
+    return nil,"[wire_header_frame]" .. tostring(err or " empty error")
   end
 
   return bytes
@@ -1522,7 +1522,7 @@ function amqp_frame.wire_body_frame(ctx,payload)
   local msg = frame:encode()
   local bytes, err = ctx:send(msg)
   if not bytes then
-    return nil,"[wire_body_frame]" .. err
+    return nil,"[wire_body_frame]" .. tostring(err or " empty error")
   end
   return bytes
 end
@@ -1547,10 +1547,10 @@ function amqp_frame.wire_method_frame(ctx,frame)
   local f
 
   local msg = frame:encode()
-  local bytes,err = ctx:send(msg)
+  local bytes, err = ctx:send(msg)
 
   if not bytes then
-    return nil,"[wire_method_frame]" .. err
+    return nil,"[wire_method_frame]" .. tostring(err or " empty error")
   end
 
   debug("[wire_method_frame] wired a frame.", "[class_id]: ", frame.class_id, "[method_id]: ", frame.method_id)
